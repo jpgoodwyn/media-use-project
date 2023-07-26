@@ -1,0 +1,861 @@
+---
+title: "Media Use and Mental Health in Children"
+author: "Jillian Goodwyn"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    theme: united
+    highlight: tango
+    toc_float: true
+    toc_depth: 4
+    code_folding: hide
+---
+
+<center>![Image source: NPR Health News](https://media.npr.org/assets/img/2010/07/07/tvkid-a7f2bd2de5928a18877644bca7d380c909ed0501-s1100-c50.jpg)</center>
+
+# Introduction
+
+## Overview of the Dataset
+
+-   The dataset for this project comes from a study that explored the **impact of media use on attention span, mental health, and academic performance in children 8 to 12 years old.** The study was published in 2020 and explores three different methods of media: total hours consumed, hours of video game play, and total media types used at the same time. Specializing in early education and childcare, I work as a data scientist in the software development industry. I thought this study sounded not only interesting but extremely relevant to my work, and I admire the thoroughness of their data collection and documentation methods.
+
+## Goals for this Project
+
+-   For this project, I will dig into some of the variables collected as part of the study and attempt to fit a few different models based on what we learned in class. I want to try and answer the question: **"Which factors seem to have an impact on the mental health of young children and is there anything we can do about it?"** I am additionally interested in the different perspectives of the students collected from the teachers, parents, and even self-reports from the students.
+
+## Dataset Details
+
+-   There are 156 rows (1 per unique child) and 42 different variables describing each child
+-   There are 5 categorical variables, 5 integer variables, and 32 numeric variables
+    -   The 5 integer variables are score related variables, so they can likely be considered as numeric for our purposes
+    -   Many of the categorical variables are IDs for the child or their teacher, or their gender or age group
+        -   The variables suffixed with `_h` indicate estimates of how many hours the child engaged in that activity
+        -   The variables suffixed with `_score` indicate scores the child received on various behavioral tasks administers by the researchers
+        -   Finally, the variables suffixed with `_rt` indicate the rates at which the children performed the behavioral tasks
+    -   There are certainly some missing values: some of them may be related to a child not engaging in a certain behavior
+        -   For example, `play_action_h` is the number of hours a child spends playing action video games per day. If this is NA, that likely means the child does not engage in this behavior. However, there are variables that indicate a score for a behavior test, in which case we cannot use that data point for that child.
+-   More information about this study and the published paper can be found here: [Cardoso-Leite, P., Buchard, A., Tissieres, I., Mussack, D., & Bavelier, D. (2020, December 22). Media use, attention, mental health and academic performance among 8 to 12 year old children](https://psyarxiv.com/bhnam/)
+
+------------------------------------------------------------------------
+
+```{r setup, message=FALSE}
+# Load libraries & dataset
+library(tidyverse)
+library(mice)
+library(VIM)
+library(ggfortify)
+library(MKinfer)
+library(ggplot2)
+library(gtsummary)
+library(modelsummary)
+
+dat <- read.csv('../Final/mmi_kids/data/mmi_kids_gva_v2021.2.csv')
+```
+
+# Exploratory Data Analysis (EDA)
+
+-   For initial exploration, I am interested in seeing if there are any **differences by age and gender in various behaviors and scores**. I hypothesize that the **older kids may use media more**, as their brains become more developed and they become more interested in socializig with their friends.
+
+-   Additionally, we can see from the EDA see there are a few **outliers** in the estimated media hours per day - there is definitely something wrong with these, as daily hours can only realistically go up to 24. The largest outlier well exceeds this at 35 hours.
+
+------------------------------------------------------------------------
+
+```{r age dist}
+dat %>%
+  ggplot(aes(x=age)) +
+    geom_histogram(binwidth = 1, fill="#69b3a2", color="#e9ecef") +
+    ggtitle("Distribution of Children's Ages") +
+    theme(
+      plot.title = element_text(size=15, hjust = 0.5)
+    ) +
+  scale_x_continuous(breaks = c(8, 9, 10, 11, 12, 13)) +
+  ylab("Frequency") +
+  xlab("Age")
+```
+
+Not too many younger kids, and weird that there is **one 13-year-old** - the study said the ages went up to 12. Not a huge deal, but a bit odd!
+
+------------------------------------------------------------------------
+
+```{r reading, warning=FALSE}
+dat %>%
+  ggplot( aes(x=read_h)) +
+    geom_histogram(binwidth = 1, fill="#69b3a2", color="#e9ecef") +
+    ggtitle("Distribution of Reading Hours per Day") +
+    theme(
+      plot.title = element_text(size=15, hjust = 0.5)
+    ) +
+  ylab("Frequency") +
+  xlab("Hours per Day")
+```
+
+The grand majority of kids **do not seem to read very much** - no more than 1 hour per day. Curious if this includes reading as part of school work or not.
+
+------------------------------------------------------------------------
+
+```{r media, warning=FALSE}
+dat %>%
+  ggplot( aes(x=media_h)) +
+    geom_histogram(binwidth = 1, fill="#69b3a2", color="#e9ecef") +
+    ggtitle("Distribution of Estimated Total Media Use per Day") +
+    theme(
+      plot.title = element_text(size=15, hjust = 0.5)
+    ) +
+  ylab("Frequency") +
+  xlab("Hours per Day")
+```
+
+This was a bit surprising to me - **10+ hours per day of media for some students seems excessive**. We obviously have an outlier at 30+ hours of media per day, as that's not possible in 24 hours!
+
+------------------------------------------------------------------------
+
+```{r media by age, warning=FALSE}
+dat %>%
+  ggplot( aes(x=age, y=media_h, color=gender)) +
+    geom_point(alpha=0.8, size=4) +
+    ggtitle("Total Estimated Media Use per Day by Age & Gender") +
+    theme(
+      plot.title = element_text(size=15, hjust = 0.5)
+    ) +
+  ylab("Hours per Day") +
+  xlab("Age")
+```
+
+It seems there is a **slight positive relationship between age and hours of media consumed per day**. There is not much of a relationship between gender and hours of media consumed. Finally, we see the 30+ hour data point come back to haunt us here too.
+
+<center>![That outlier be haunting us like a dang ghost.](https://media.tenor.com/u1p3ddl1iT4AAAAd/ghost-dance-summer-camp-island.gif){width="50%"}</center>
+
+------------------------------------------------------------------------
+
+```{r media by nonaction games, warning=FALSE}
+dat %>%
+  ggplot( aes(x=k6_score, y=play_nonaction_h, color=gender)) +
+    geom_point(alpha=0.8, size=4) +
+    ggtitle("Non-Action Video Game Hours per Day by Distress Score & Gender") +
+    theme(
+      plot.title = element_text(size=15, hjust = 0.5)
+    ) +
+  ylab("Hours per Day") +
+  xlab("Distress Score")
+```
+
+Looking at just **non-action video game play**, we see females leading the pack with the higher hours played. However, we see **males at the high end of distress**. Overall, the data points are rather spread and I would be hesitant to make any sweeping conclusions here without more data to back them up.
+
+<center>![...does cooking in Breath of the Wild count as non-action game play??](https://64.media.tumblr.com/7a5f3925e8e8351619759a2a9566bb03/tumblr_omsjs7eiVk1r85hlio1_r1_540.gif)</center>
+
+------------------------------------------------------------------------
+
+```{r action games and distress, warning=FALSE}
+dat %>%
+  ggplot( aes(x=k6_score, y=play_action_h, color=gender)) +
+    geom_point(alpha=0.8, size=4) +
+    ggtitle("Action Video Game Hours per Day by\nDistress Score & Gender") +
+    theme(
+      plot.title = element_text(size=15, hjust = 0.5)
+    ) +
+  ylab("Hours per Day") +
+  xlab("Distress Score")
+```
+
+Looking at hours of **action video games played per day**, we see almost exclusively **males** at the high ends for both hours played and distress scores. Video game play and gender might be good candidates for explanatory variables later on in this analysis!
+
+<center>![Action games, AKA lots of BOOM POW BAM explosions n\' stuff!](https://j.gifs.com/n54MRD.gif)</center>
+
+------------------------------------------------------------------------
+
+```{r action games by mind wandering, warning=FALSE}
+dat %>%
+  ggplot( aes(x=mw_score, y=play_action_h, color=gender)) +
+    geom_point( alpha=0.8, size=4) +
+    ggtitle("Action Video Game Hours per Day by\nMind Wandering Score & Gender") +
+    theme(
+      plot.title = element_text(size=15, hjust = 0.5)
+    ) +
+  ylab("Hours per Day") +
+  xlab("Mind Wandering Score")
+```
+
+Keeping on the topic of action video games, I wanted to likewise look at the **Mind-Wandering Score** that was collected by researchers. We do not see anything too extreme other than a handful of male players who spent a lot of time playing these games and have a slightly higher mind wandering score. However, I find it especially interesting that the students with the **highest mind wandering scores actually have very low action video game hours**. This could be informative!
+
+------------------------------------------------------------------------
+
+## Principal Component Analysis (PCA)
+
+PCA is a method to **reduce the dimensionality** of our dataset and distill the information that helps best explain the variance in the data. Looking at the PCA helps us determine which features give us the most salient information about patterns we are looking for.
+
+Two methods of evaluating the PCA are using a **scree plot** and **biplot with loadings**.
+
+<center>![Did someone say 'salient'?](https://media2.giphy.com/media/duKV1YBPhDtd9efnrR/giphy.gif?cid=6c09b952655c355f30fe3931fe210d31a1539034fd5604a1&rid=giphy.gif&ct=g){width="50%"}</center>
+
+```{r PCA, warning=FALSE}
+pca <- prcomp(na.omit(dat[, c('age', 'grades', 'read_h', 'video_h', 'music_h', 'write_h', 'create_h',
+             'play_action_h', 'play_nonaction_h', 'surf_h', 'skype_h', 'talk_h', 'mmi_score',
+             'k6_score', 'sdq_score', 'ct_score', 'cp_score', 'sleep_score', 'mw_score', 
+             'grit_score', 'toi_score', 'd2_rt', 'sart_rt', 'blast_rt')]),
+              center = TRUE, scale. = TRUE)
+
+screeplot(pca, type="lines")
+```
+
+In the **scree plot**, we see that the **first principle component* captures the most variation**, and then the second captures some variation, and so on. Past the 2nd principle component, we see less and less variation being explained. Therefore, it seems the first and second components distilled the most information.
+
+***
+
+<center><font size=4>**Biplot with Loadings**</font></center>
+
+```{r loadings}
+autoplot(pca, data = na.omit(dat), colour = "school_year", loadings=TRUE, loadings.label=TRUE)
+```
+
+For the PCA biplot with loadings, there was **not a clear separation by school year**. The labels get a bit cluttered, but we see that:
+
+- The **Sleep Score** is opposite of the **Strength & Difficulties Score**, the **Parent Score**, and the **K6 Distress Score**
+  - This means there is a **negative** relationship between these variables for these components. This will be useful for our analyses!
+- Likewise, we see that the **Grit Score** and **Grades** are opposite of several of the **Video Game** related variables. This is also interesting!
+
+------------------------------------------------------------------------
+
+# Data Cleaning
+
+## Cleaning Overview
+
+- One of the students **filled out his responses as the max of each possible response**, resulting in unrealistic data. I decided to remove this data point for the remainder of the analysis.
+- Additionally, **some students were missing all of their media consumption data**, and I did not want to impute or make assumptions for these data points. Therefore, these students were removed as well. This left **130 students** with some minor missing data that can be imputed using the MICE package.
+
+<center>![No cheating on your responses please!](https://media.tenor.com/AKS0zwKDvMcAAAAd/mr-bean-exams.gif)</center>
+
+- I chose to use the **MICE package** to impute missing values. I have used this in the past and was pleased with the results. Basically, this package uses multiple regression to predict what the missing values are.
+- I like the MICE method because it does not assume that the data are normally distributed and also assumes the data are missing randomly. These assumptions were appropriate for this project. [Source](https://www.analyticsvidhya.com/blog/2016/03/tutorial-powerful-packages-imputing-missing-values/)
+
+- MICE also has really nice **plots to visualize and evaluate missing values** - let's go ahead and use that first!
+
+```{r cleaning, warning=FALSE}
+# Remove student with fake data
+dat <- dat[dat$kid != 'k029', ]
+
+# Remove rows with more than 50% NA
+dat_drop <- dat[which(rowMeans(!is.na(dat)) > 0.60), ]
+
+# Select the numerical columns with the missing data
+dat_mis <- select(dat_drop, c('grades':'blast_miss_rate'))
+
+# Create a really nice MICE plot to show missing value patterns
+mice_plot <- aggr(dat_mis, col=c('navyblue','yellow'),
+                    numbers=TRUE, sortVars=TRUE,
+                    labels=names(dat_mis), cex.axis=.7,
+                    gap=3, ylab=c("Missing data","Pattern"))
+```
+
+- We see the **Grit Score** is by far the variable with the most missing values. This is acceptable because I do not plan to heavily use this variable for prediction.
+- However, I see that the **Child's Parent Score** for ADHD-like behavior (`cp_score`) also has a lot of missing values, and I would actually like to use this variable in my analysis. I feel comfortable moving forward with the MICE imputation, but will closely evaluate the results when considering the Child's Parent Score.
+
+```{r impute, eval=FALSE}
+# Note that this code chunk below is set NOT to run because I imputed the data beforehand and already saved the file. The imputation takes several minutes, so I have saved the imputed dataset and loaded it here.
+
+# Perform the imputation
+ dat_imputed <- mice(dat_mis, m=5, maxit = 50, method = 'pmm', seed = 500)
+
+# Select one of the imputed datasets to use (Using 2 here)
+ dat_imp_complete <- complete(dat_imputed, 2)
+
+# Grab the categorical variables that we did not impute
+ dat_cat <- select(dat_drop, c('kid':'gender'))
+
+# Concat the imputed data to the categorical cols
+ imputed_full <- cbind(dat_cat, dat_imp_complete)
+
+ write.csv(imputed_full, '../Final/data_imputed.csv')
+```
+
+```{r imputed data load}
+# Load the data for real this time
+imputed_full <- read.csv('data_imputed.csv')
+```
+
+<center>![Thank you, MICE!](https://media.tenor.com/LJ2LWBtL6wUAAAAC/dancing-mice-dancing-mouse.gif)</center>
+
+------------------------------------------------------------------------
+
+# Hypothesis Testing
+
+## T-Tests
+
+My goal with the t-tests is to explore if there are any **differences between the teachers in relation to the grades that students self-reported**. A teacher or professor can have a huge impact on a student's specific learning style, so I am interested to see if there is anything of interest here.
+
+```{r t-test}
+
+teachers <- na.omit(unique(imputed_full$teacher))
+B <- length(teachers)
+
+# Compute the number of pairs, and create an appropriately
+# sized data frame to store the p-values in:
+n_comb <- choose(B, 2)
+p_values <- data.frame(group1 = vector("character", n_comb),
+                       group2 = vector("character", n_comb),
+                       p = vector("numeric", n_comb))
+
+# Loop over all pairs:
+k <- 1 # Counter variable
+for(i in 1:(B-1))
+{
+  for(j in (i+1):B)
+  {
+    # Run a t-test for the current pair:
+    test_res <- perm.t.test(grades ~ teacher, 
+                            data = subset(imputed_full,
+                                          teacher == teachers[i] | teacher == teachers[j]))
+    # Store the p-value:
+    p_values[k, ] <- c(teachers[i], teachers[j], test_res$p.value)
+    # Increase the counter variable:
+    k <- k + 1
+  }
+}
+
+p_values$bonf <- p.adjust(p_values$p, method = "bonferroni")
+p_values$holm <- p.adjust(p_values$p, method = "holm")
+p_values$bh <- p.adjust(p_values$p, method = "BH")
+
+knitr::kable(p_values)
+```
+
+Wow this is interesting! **Teacher 11 shows up as having a very low p-value with almost all other teachers**.
+- The **confidence intervals do NOT include zero** for teacher 11's comparisons, so we can be quite confident that the relationship we are seeing is valid.
+- In fact, since I was running so many hypothesis tests I made sure to use a couple different **p-value corrections**:
+  - While there was no hope at all for finding relationships between most of the other teachers and their grades, teacher 11 was still statistically significant.
+  - It seems the self-reported grades were truly quite different for this teacher. I cannot resist, so I will make a couple brief exploratory graphs here.
+
+```{r t-test graph}
+ggplot(imputed_full, aes(x = reorder(teacher, -grades), y = grades)) + 
+  geom_bar(position = "dodge",
+           stat = "summary",
+           fun = "mean",
+           fill="#69b3a2") +
+  # Fancy title
+  ggtitle("Teachers by Average Self-Reported Student Grades") +
+  xlab("Teacher") +
+  ylab("Average Student Grades") +
+  # Move the title to the center 
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+We clearly see that Teacher T11 has much lower self-reported student grades. Let's dig further into which grades this teacher covers - it is possible they have special needs or a tough class.
+
+```{r t-test table}
+knitr::kable(table(imputed_full$teacher, imputed_full$school_year))
+```
+
+Aha!, teacher T11 teaches **exclusively special needs classes**. This certainly explains the grades we are seeing. Special needs students may **not have self-reported their grades the same way as neuro-typical students**, and it's even possible that someone else entered the grades for these students. We will definitely need to keep this in mind as we continue with our analyses.
+
+***
+
+## Wilcoxon-Mann-Whitney Test
+
+Next, I'm curious to see if there is any difference in the **number of hours boys and girls play video games per day**.
+
+- I hypothesize that there will be a difference, and boys will play more video games than girls.
+
+```{r W-M-W Test}
+ladies <- imputed_full[imputed_full$gender == "female",]
+gents <- imputed_full[imputed_full$gender == "male",]
+
+print(wilcox.test(ladies$play_h, gents$play_h))
+print(paste("Girls average hours of video games per day: ", round(mean(ladies$play_h), 2)))
+print(paste("Boys average hours of video games per day: ", round(mean(gents$play_h), 2)))
+```
+
+We indeed see a difference between the number of hours that boys and girls play video games. **The boys played an average of just over an hour of video games per day, while the girls played about 45 minutes per day.**
+
+```{r W-M-W boxplot}
+ggplot(imputed_full, aes(x=gender, y=play_h, color=gender, fill=gender) ) + 
+  geom_violin() +
+  # Fancy title
+  ggtitle("Hours of Video Games Played Per Day by Gender") +
+  xlab("Gender") +
+  ylab("Hours of Video Games Played ") +
+  # Move the title to the center 
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+***
+
+## Correlation Test
+
+Moving on, I am interested in seeing if there is any **correlation between a child's Distress Score and the Sleep Score that they received**.
+
+- Sleep score is an "estimate of the child's sleep quality; a higher score indicates better sleep and less fatigue."
+- Not getting enough sleep can be disastrous for performance and mental health, so I am curious if there is some sort of relationship in this dataset.
+
+```{r corr}
+corr <- cor.test(imputed_full$k6_score, imputed_full$sleep_score,
+         use = "pairwise.complete")
+
+print(corr)
+
+ggplot(imputed_full, aes(k6_score, sleep_score)) +
+  geom_point() +
+  # Fancy title
+  ggtitle("Sleep Score by Distress Score") +
+  xlab("Distress Score") +
+  ylab("Sleep Score") +
+  # Move the title to the center 
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+- The **correlation is -0.39 (medium strength)**, the **p-value is < 0.001**, and **0 is not included in the confidence interval**
+- Therefore, there is enough evidence to reject the null hypothesis that there is no relationship. We can conclude that **there is evidence of a negative relationship between distress and sleep quality**. That is, the poorer the sleep quality, the higher the distress score.
+
+***
+
+## Chi-Squared Test
+
+I was listening to a **Malcolm Gladwell** podcast about how teachers had a strong impact on the performance of their students. Since we want to explore categorical variables for the Chi-Squared Test, I am interested in exploring if there is a **relationship between the teacher and the gender of the student.**
+
+```{r chi}
+knitr::kable(table(imputed_full$teacher, imputed_full$gender))
+chisq.test(table(imputed_full$teacher, imputed_full$gender),
+           simulate.p.value = TRUE)
+```
+
+Not super surprising, but still encouraging to see that the gender of students does not seem to interact with the teachers.
+
+<center>![Sorry if this analysis has disappointed you, Malcolm!!](https://c.tenor.com/fIWuZ4PncksAAAAC/thats-the-point-malcolm-gladwell.gif)</center>
+
+------------------------------------------------------------------------
+
+# Modeling: Regression
+
+## Attribute Selection
+
+I am interested in the **K-6 distress scale score** (`k6_score`) and the **Strength and Difficulties Questionnaire score** (`sdq_score`). *NOTE: I am thinking these two variables may appear to be similar on the surface, but I am interested in exploring if there are any underlying factors that differ.*
+
+-   The **K-6 distress scale** measures psychological distress including anxiety and depression. The higher the score, the higher the levels of distress.
+
+-   The **Strength and Difficulties score** measures levels of socio-emotional difficulty. The higher the score, the more social and emotional difficulties the child is experiencing.
+
+- My hypothesis is that there is no difference between K-6 distress and socio-emotional difficulty in terms of their predictors.
+
+My goal is to fit **identical models for both dependent variables** so I can see if there are any **underlying differences between the two**. 
+
+  - I am interested in exploring variables such as the **ages of the kids, gender, grades, total media consumed, the perspectives of the teachers and parents, and sleep habits**. 
+  - There are also various other attributes about the children that available, such as the **"mind wandering"** and **"growth mindset"** scores.
+  
+***
+
+## Model: K-6 Distress
+
+```{r fit}
+# Create some one-hot encoded variables so we can use them
+imputed_full$age_group <- as.factor(imputed_full$age_group)
+imputed_full$gender <- as.factor(imputed_full$gender)
+
+# Fit linear regression model for K6 distress
+m_k6 <- lm(k6_score ~ age_group + gender + grades + read_h + video_h + music_h +
+             create_h + play_action_h + play_nonaction_h + surf_h + skype_h +
+              talk_h + mmi_score + sdq_score + ct_score + cp_score + 
+             sleep_score + mw_score + toi_score + d2_rt + sart_rt + blast_rt, 
+           data = imputed_full)
+
+# Pretty up the results
+m_k6 %>%
+  gtsummary::tbl_regression() %>%
+  gtsummary::bold_labels() %>%
+  gtsummary::bold_p(t=0.05) %>%
+  gtsummary::add_glance_source_note()
+```
+
+Fabulous. First, we have an **R-square value of 0.48**, which is not too shabby for a social science dataset! This means that our model is explaining about **half of the variation that we are seeing** in the data.
+
+***
+
+### Increasers
+
+Which variables seem to relate to a child having more distress? We see significant, positive relationships with the following variables:
+
+1. **Strengths & Difficulties score** (`sdq_score`)
+2. **Mind Wandering score** (`mw_score`)
+3. **D2 Response Time** (`d2_rt`)
+
+***
+
+#### 1. Strengths & Difficulties Score
+
+- Significant at the p < 0.001 level
+- For every increase in this score, we will see an increase in the Distress score of 0.32
+- It is not surprising that we see a relationship between distress and the Strengths & Difficulties score. As I hypothesized, I figured these two variables were likely to correlate to one another
+- The more distress a child is in, the more likely they are to also have social and behavioral difficulties
+
+```{r K6 x SDQ}
+imputed_full %>%
+  ggplot( aes(x=sdq_score, y=k6_score) ) +
+    geom_point(alpha=0.8, size=4, color="red") +
+    ggtitle("K6 Distress Score vs Strengths & Difficulties Score") +
+    theme(
+      plot.title = element_text(size=15, hjust = 0.5)
+    ) +
+  ylab("K6 Distress Score") +
+  xlab("SDQ Score")
+```
+
+***
+
+#### 2. Mind Wandering Score
+
+- Significant at the p < 0.024 level
+- For every increase in this score, we see an increase in the Distress Score of 3.2
+- This one is also not surprising! Mind wandering can make it difficult to focus and accomplish tasks, which can understandably create distress for students
+
+```{r K6 x MW}
+imputed_full %>%
+  ggplot( aes(x=mw_score, y=k6_score)) +
+    geom_point(alpha=0.8, size=4, color="red") +
+    ggtitle("K6 Distress Score vs Mind Wandering Score") +
+    theme(
+      plot.title = element_text(size=15, hjust = 0.5)
+    ) +
+  ylab("K6 Distress Score") +
+  xlab("Mind Wandering Score")
+```
+
+***
+
+#### 3. D2 Response Time
+
+*The Response Time score refers to the amount of time in seconds that it took students to respond to a task given by the researchers.*
+
+- p < 0.007
+- For every increase in response time we see an increase in the distress score of 3.8
+- It seems that kids who had longer response times may have higher levels of distress
+- It is possible that more distress could cloud thinking and therefore response time
+
+```{r K6 x D2}
+imputed_full %>%
+  ggplot( aes(x=d2_rt, y=k6_score)) +
+    geom_point(alpha=0.8, size=4, color="red") +
+    ggtitle("K6 Distress Score vs D2 Response Time") +
+    theme(
+      plot.title = element_text(size=15, hjust = 0.5)
+    ) +
+  ylab("K6 Distress Score") +
+  xlab("D2 Response Time")
+```
+
+*** 
+
+### Decreasers of Distress
+
+From the regression model, we see significant inverse relationships with Distress and the following variables: 
+
+1. **Daily Hours Spent Creating Content** (`create_h`)
+2. **Daily Hours Spent Playing Non-Action Video Games** (`play_nonaction_h`)
+3. **Daily Hours Spent Talking to Others without Tech** (`talk_h`)
+4. **BLAST score** (`blast_rt`)
+
+***
+
+#### 1. Daily Hours Spent Creating Content 
+
+- p < 0.038
+- For every increase in Content Creation we the Distress Score increase by 0.81
+- This means that kids who spent more time creating images, art, and other content had lower levels of distress. A great reason to put that creative thinking cap on!
+
+```{r K6 x Content}
+imputed_full %>%
+  ggplot( aes(x=create_h, y=k6_score)) +
+    geom_point(alpha=0.8, size=4, color="blue") +
+    ggtitle("K6 Distress Score vs Daily Content Creation") +
+    theme(
+      plot.title = element_text(size=15, hjust = 0.5)
+    ) +
+  ylab("K6 Distress Score") +
+  xlab("Daily Content Creation Hours")
+```
+
+***
+
+#### 2. Daily Hours Spent Playing Non-Action Video Games
+
+- Significant at the p < 0.03 level
+- For every increase in non-action video game play, we see a decrease in the distress score by 1
+- Perhaps non-action video games are more relaxing and help reduce distress levels
+
+```{r K6 x Nonaction}
+imputed_full %>%
+  ggplot( aes(x=play_nonaction_h, y=k6_score)) +
+    geom_point(alpha=0.8, size=4, color="blue") +
+    ggtitle("K6 Distress Score vs by Daily Non-Action Video Games") +
+    theme(
+      plot.title = element_text(size=15, hjust = 0.5)
+    ) +
+  ylab("K6 Distress Score Score") +
+  xlab("Daily Non-Action Video Game Hours")
+```
+
+***
+
+#### 3. Daily Hours Spent Talking to Others without Tech
+
+- Significant at the p < 0.038 level
+- For every increase in this variable we see a decrease in distress by 0.34
+- Perhaps students felt more focused when talking without technology and experienced lower levels of distress without relying on technology. It would be interesting to see how this holds up since the pandemic, as we have become extremely reliant on technology for communication!
+
+```{r K6 x Talk}
+imputed_full %>%
+  ggplot( aes(x=talk_h, y=k6_score)) +
+    geom_point(alpha=0.8, size=4, color="blue") +
+    ggtitle("K6 Distress Score vs Daily Non-Tech Talking") +
+    theme(
+      plot.title = element_text(size=15, hjust = 0.5)
+    ) +
+  ylab("K6 Distress Score") +
+  xlab("Daily Non-Tech Talking Hours")
+```
+
+***
+
+#### 4. BLAST Score
+
+*"BLAST" refers to a response time test where a higher score means a better response time.*
+
+- Significant at the p < 0.001 level
+- For every increase in this variable we see a decrease in the distress score by 4.7
+- It seems that children with less distress were able to perform better on this task
+
+```{r K6 x BLAST}
+imputed_full %>%
+  ggplot( aes(x=blast_rt, y=k6_score)) +
+    geom_point(alpha=0.8, size=4, color="blue") +
+    ggtitle("K6 Distress Score vs BLAST Score") +
+    theme(
+      plot.title = element_text(size=15, hjust = 0.5)
+    ) +
+  ylab("K6 Distress Score") +
+  xlab("BLAST Score")
+```
+
+*** 
+
+## Model: Strength & Difficulties
+
+```{r fit 2}
+# Fit linear regression model for Strength & Difficulties score
+m_sdq <- lm(sdq_score ~ age_group + gender + grades + read_h + video_h + music_h +
+             create_h + play_action_h + play_nonaction_h + surf_h + skype_h +
+              talk_h + mmi_score + k6_score + ct_score + cp_score + 
+             sleep_score + mw_score + toi_score + d2_rt + sart_rt + blast_rt, 
+           data = imputed_full)
+m_sdq %>%
+  gtsummary::tbl_regression() %>%
+  gtsummary::bold_labels() %>%
+  gtsummary::bold_p(t=0.05) %>%
+  gtsummary::add_glance_source_note()
+```
+
+Adjusted R-squared of the model is 0.54, which is not bad. We are explaining about 54% of the variation in our data with these variables.
+
+***
+
+### Increasers
+
+We see three significant increasers of the Strengths and Difficulties score:
+
+1. **Daily Hours Spent Playing Non-Action Video Games** (`play_nonaction_h`)
+2. **Multitasking Score** (`mmi_score`)
+3. **K6 Distress and Anxiety Score** (`k6_score`)
+
+***
+
+#### 1. Daily Hours Spent Playing Non-Action Video Games
+
+- Significant at the p < 0.032 level
+- For every increase we see a 1.4 increase in the Strengths & Difficulties Score
+- I am INCREDIBLY surprised to see Daily Hours Spent Playing Non-Action Video Games show up as an increaser here, especially since we saw it as a decreaser for the Distress score above
+- This is a real head-scratcher for me, and I would be interested in digging into the specific types of non-action games being played and if there are different genres
+
+```{r SDQ x Nonaction}
+imputed_full %>%
+  ggplot( aes(x=play_nonaction_h, y=sdq_score)) +
+    geom_point(alpha=0.8, size=4, color="red") +
+    ggtitle("Strengths & Difficulties Score vs Daily Non-Action Video Games") +
+    theme(
+      plot.title = element_text(size=15, hjust = 0.5)
+    ) +
+  ylab("SDQ Score") +
+  xlab("Daily Non-Action Video Games Hours")
+```
+
+***
+
+#### 2. Multitasking Score
+
+- Significant at the p < 0.004 level
+- For every increase in this score we see a 1.1 increase in the Strengths & Difficulties Score
+- This one is interesting, as the multitasking score is a rating of how many forms of media the students report using at the same time
+- It is definitely possible that extreme multitasking could impact social and behavioral difficulties
+
+```{r SDQ x multi}
+imputed_full %>%
+  ggplot( aes(x=mmi_score, y=sdq_score)) +
+    geom_point(alpha=0.8, size=4, color="red") +
+    ggtitle("Strengths & Difficulties Score vs Media Multitasking") +
+    theme(
+      plot.title = element_text(size=15, hjust = 0.5)
+    ) +
+  ylab("SDQ Score") +
+  xlab("Media Multitasking")
+```
+
+***
+
+#### 3. K6 Distress and Anxiety Score
+
+- Significant at the p < 0.001 level
+- For every increase in this variable the Strengths and Difficulties Score also increases by 0.6
+- Again, not too surprising with this as we saw that these variables were related previously
+
+*THIS IS THE SAME GRAPH AS ABOVE but I am showing it again for uniformity!*
+
+```{r SDQ x k6}
+imputed_full %>%
+  ggplot( aes(x=k6_score, y=sdq_score)) +
+    geom_point(alpha=0.8, size=4, color="red") +
+    ggtitle("Strengths & Difficulties Score vs K6 Distress Score") +
+    theme(
+      plot.title = element_text(size=15, hjust = 0.5)
+    ) +
+  ylab("SDQ Score") +
+  xlab("K6 Distress Score")
+```
+
+***
+
+### Decreasers
+
+Overall, there are some interesting nuggets on the decreasers for the Strengths and Difficulties score:
+
+1. **Grades**
+2. **Daily Hours Watching Videos**
+3. **Sleep Score**
+
+***
+
+#### 1. Grades
+
+- Significant at the p < 0.002 level
+- For every increase in grades, we see a decrease in Strengths & Difficulties Score of 8.8
+- This also means the lower a student's grades, the higher their socio-emotional difficulties likely are
+- This is likely not causation, as we can imagine that this could be a two-way road: socio-emotional difficulties can lead to low grades, but the inverse is likely true as well
+- Emotions are not simple: there is probably a more complex relationship going on here and we are just hitting the tip of the iceberg!
+
+```{r SDQ x grades}
+imputed_full %>%
+  ggplot( aes(x=grades, y=sdq_score)) +
+    geom_point(alpha=0.8, size=4, color="blue") +
+    ggtitle("Strengths & Difficulties Score vs Grades") +
+    theme(
+      plot.title = element_text(size=15, hjust = 0.5)
+    ) +
+  ylab("SDQ Score") +
+  xlab("Grades")
+```
+
+***
+
+#### 2. Daily Hours Watching Videos
+
+- Significant at the p < 0.017 level
+- For every increase in video watching, we see a 1.0 decrease in the Strengths & Difficulties score
+- Perhaps kids are finding entertaining or educational videos that are soothing to watch
+- More data digging would be fantastic here to find out what video content kids are interested in
+
+```{r SDQ x watching}
+imputed_full %>%
+  ggplot( aes(x=video_h, y=sdq_score)) +
+    geom_point(alpha=0.8, size=4, color="blue") +
+    ggtitle("Strengths & Difficulties Score vs Sleep Score") +
+    theme(
+      plot.title = element_text(size=15, hjust = 0.5)
+    ) +
+  ylab("SDQ Score") +
+  xlab("Daily Hours Watching Videos")
+```
+
+*NOTE: This graph honestly seems weird! I would have expected a much clearer inverse relationship, but the datapoints are quite spread. Further investigation required!*
+
+***
+
+#### 3. Sleep Score
+
+- Significant at the p < 0.001 level
+- For every increase in sleep quality, the Strengths & Difficulties Score decreases by 8.7
+- It seems better sleep and less difficulties are related...
+- Personally, I know I have a lot less struggles when I am well rested!
+
+```{r SDQ x sleep}
+imputed_full %>%
+  ggplot( aes(x=sleep_score, y=sdq_score)) +
+    geom_point(alpha=0.8, size=4, color="blue") +
+    ggtitle("Strengths & Difficulties Score vs Sleep Score") +
+    theme(
+      plot.title = element_text(size=15, hjust = 0.5)
+    ) +
+  ylab("SDQ Score") +
+  xlab("Sleep Score")
+```
+
+***
+
+## Diagnostic Plots
+
+### K-6 Distress Model Diagnostics
+
+```{r k6 diagnostic}
+autoplot(m_k6, which = 1:6, ncol = 2, label.size = 3)
+```
+
+Observations:
+
+*NOTE: I had investigated outliers from a previous look at this data and eliminated them before this attempt at this analysis.*
+
+- The residuals look pretty good without a massive amount of spread or clumping
+- The Q-Q plot does wander away at right tail, which could be investigated further
+- For Cook's distance, the points are well below 1
+- Overall no the datapoints appear to have a wild amount of leverage, so we seem to be in decent shape
+
+***
+
+### Strengths & Difficulties Model Diagnostics
+
+```{r sdq diagnostic}
+autoplot(m_sdq, which = 1:6, ncol = 2, label.size = 3)
+```
+
+Observations:
+
+- Very similar results to the previous model where the residuals look good but the QQ plot is actually better than the previous model
+- Some slight fluctation in the tails but nothing extreme
+- Again, no crazy outliers since I had already addressed them from previous familiarity with this dataset and the initial cleaning
+- No suspicious datapoints are evident in the Cook's distance and Leverage plots
+
+<center>![Hopefully my diagnostic plots were a bit more optimistic!](https://media4.giphy.com/media/3orif5JHN2ymsSryRq/giphy.gif)</center>
+
+***
+
+# Final Thoughts
+
+- We saw some astonishing differences in potential underlying factors for distress and for social-emotional difficulties. I would have thought these were closely interdependent and would have similar relationships with the explanatory variables, but this was not the case. 
+- I was most surprised by the **Daily Hours Spent Playing Non-Action Video Games** variable showing up as a decreaser in the first model but then as an increaser in the second model! As I had mentioned, it would be great to get additional data to further dig into this and see if there are sub-genres that appear.
+
+**Some parting thoughts and recommendations:**
+
+1. Stress, anxiety, and depression can have a spider-web effect into many other parts of a person's life - it's astonishing to already see these effects with kids at such young ages in life.
+
+2. It is possible that more distress could cloud thinking and therefore response time.
+
+3. Consider spending a little extra time creating content rather than consuming content.
+
+4. Get a good night's rest when possible! This is possibly the most important piece of advice!
+
+<center>![Create some new content just like Bob Ross](https://media.tenor.com/gHo3jnYbDYwAAAAC/bob-ross-painting.gif)</center>
+
+<center>**Thank you for reading!**</center>
