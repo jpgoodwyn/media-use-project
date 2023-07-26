@@ -1,6 +1,8 @@
 # Welcome!
 
-This is a repo to show my final project for one of my favorite classes for my master's degree in data science at Buffalo State, Statistics Applications to Data Science with R. We were instructed to find a dataset, think of a hypothesis to explore, and demonstrate our statistical skills to address the hypothesis using R. My work and findings are published at the accompanying GitHub page.
+This is a repo to show my final project for one of my favorite classes for my master's degree in data science at Buffalo State, Statistics Applications to Data Science with R. We were instructed to find a dataset, think of a hypothesis to explore, and demonstrate our statistical skills to address the hypothesis using R. My work and findings are published at the accompanying GitHub page <a href="https://jpgoodwyn.github.io/media-use-project/">here.</a> The code for the project can be found in the *docs* folder of this repo and is a Rmd file.
+
+<img src="https://s.hdnux.com/photos/71/37/61/15072376/5/rawImage.jpg" alt="children zoned out on phones" width="500"/>
 
 ## About the Dataset
 
